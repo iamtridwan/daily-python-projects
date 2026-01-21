@@ -81,13 +81,28 @@ class ExpenseTracker:
             return
         
     # view summary
-    def view_summary(self):
+    def view_summary(self, category: str = ''):
         """
         Provides a summary of expenses by category.
         """
         if not self.expenses or len(self.expenses) == 0:
             print('No expenses recorded yet.')
             return
+        
+        console = Console()
+        if category and category.strip() != '':
+            filtered_expenses = [expense for expense in self.expenses if expense.category.lower() == category.lower()]
+            if not filtered_expenses:
+                print(f'No expenses found for category: {category}')
+                return
+            total = sum(expense.amount for expense in filtered_expenses)
+            table = Table(show_header=True, header_style="bold magenta", title=f'\nExpense Summary {category}')
+            table.add_column('Amount', justify='left')
+            table.add_row(f'${total:.2f}')
+            console.print(table)
+            print('\n')
+            return
+
         
         summary = {}
         total_expenses = sum(expense.amount for expense in self.expenses)
@@ -97,7 +112,7 @@ class ExpenseTracker:
             else:
                 summary[expense.category] = expense.amount
         
-        console = Console()
+        
         table = Table(show_header=True, header_style="bold magenta", title=f'\nExpense Summary\n\nTotal Spending: ${total_expenses:.2f}\n')
         table.add_column('Category', justify='left')
         table.add_column('Total Amount', justify='left')
@@ -130,6 +145,7 @@ if __name__ == '__main__':
         elif choice == '2':
             tracker.view_expenses()
         elif choice == '3':
-            tracker.view_summary()
+            category = input('Enter category to filter by (or press Enter to view all): ').strip()
+            tracker.view_summary(category)
         else:
             print('Invalid choice. Please enter a valid option (1 - 4).\n')
