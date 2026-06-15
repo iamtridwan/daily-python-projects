@@ -11,6 +11,7 @@ deeplearning/
 .env.local
 .env.*
 *.csv
+*.txt
 
 # Python caching
 __pycache__/
