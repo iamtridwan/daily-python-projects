@@ -225,9 +225,10 @@ if map_data and map_data.get("last_clicked"):
 
     # Check if click position actually changed
     if abs(clicked_lat - st.session_state.selected_lat) > 0.001 or abs(clicked_lon - st.session_state.selected_lon) > 0.001:
+        resolved_name, _, _, _ = cached_resolve_location(f"{clicked_lat}, {clicked_lon}")
         st.session_state.selected_lat = clicked_lat
         st.session_state.selected_lon = clicked_lon
-        st.session_state.selected_name = f"({clicked_lat:.3f}, {clicked_lon:.3f})"
+        st.session_state.selected_name = resolved_name
         st.rerun()
 
 # ==============================================================================
@@ -236,17 +237,19 @@ if map_data and map_data.get("last_clicked"):
 with st.sidebar:
     curr_lat = st.session_state.selected_lat
     curr_lon = st.session_state.selected_lon
-    curr_name = st.session_state.selected_name
+
+    # Timezone & location lookup for selected point
+    display_name, _, _, tz_str = cached_resolve_location(f"{curr_lat}, {curr_lon}")
+    tz = ZoneInfo(tz_str)
+
+    # Use custom search name if specified, otherwise resolved location address
+    curr_name = st.session_state.selected_name if (st.session_state.selected_name and not st.session_state.selected_name.startswith("(")) else display_name
 
     st.markdown(f"### 📍 {curr_name}")
     st.caption(f"{curr_lat:.3f}, {curr_lon:.3f}")
 
     # Fetch cached eclipse details for selected point
     details = cached_compute_eclipse_details(curr_lat, curr_lon)
-
-    # Timezone lookup for selected point
-    display_name, _, _, tz_str = cached_resolve_location(f"{curr_lat}, {curr_lon}")
-    tz = ZoneInfo(tz_str)
 
     if not details["visible"]:
         st.warning("No eclipse visible from this location on August 12, 2026.")
