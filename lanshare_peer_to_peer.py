@@ -71,7 +71,7 @@ class EventBroadcaster:
             while True:
                 message = await queue.get()
                 yield f"data: {message}\n\n"
-        except asyncio.CancelledError:
+        except (asyncio.CancelledError, Exception):
             pass
         finally:
             self.listeners.discard(queue)
@@ -710,7 +710,7 @@ PAGE_MAIN = """<!DOCTYPE html>
       evtSource.onmessage = (e) => {{
         if (e.data === 'reload') {{
           window.location.reload();
-        }
+        }}
       }};
       evtSource.onerror = () => {{ sseActive = false; }};
     }} catch(err) {{
@@ -1111,6 +1111,7 @@ def main() -> None:
 
     config = uvicorn.Config(app=app, host=args.host, port=args.port, log_level="warning")
     server = uvicorn.Server(config)
+    server.install_signal_handlers = lambda: None
 
     try:
         server.run()
