@@ -24,6 +24,7 @@ Run:
 
 import argparse
 import asyncio
+import html
 import io
 import json
 import random
@@ -71,7 +72,9 @@ class EventBroadcaster:
                 message = await queue.get()
                 yield f"data: {message}\n\n"
         except asyncio.CancelledError:
-            self.listeners.remove(queue)
+            pass
+        finally:
+            self.listeners.discard(queue)
 
     def notify(self, message: str = "reload") -> None:
         for queue in list(self.listeners):
@@ -390,6 +393,31 @@ PAGE_MAIN = """<!DOCTYPE html>
       color: #94a3b8;
       margin-top: 0.4rem;
     }}
+    .shared-display-box {{
+      background-color: #ffffff;
+      border: 1px solid #cbd5e1;
+      border-radius: 8px;
+      padding: 0.75rem 1rem;
+      margin-bottom: 0.75rem;
+      word-break: break-all;
+    }}
+    .shared-display-label {{
+      font-size: 0.75rem;
+      font-weight: 600;
+      color: #64748b;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      margin-bottom: 0.25rem;
+    }}
+    .shared-display-content {{
+      font-size: 0.95rem;
+      color: #0f172a;
+    }}
+    .shared-display-content a {{
+      color: #2563eb;
+      font-weight: 600;
+      text-decoration: underline;
+    }}
     .files-header-row {{
       display: flex;
       justify-content: space-between;
@@ -541,6 +569,7 @@ PAGE_MAIN = """<!DOCTYPE html>
 
   <div class="text-share-card">
     <div class="text-share-header">📋 Quick Text & Link Share</div>
+    {shared_display_html}
     <form method="post" action="/text">
       <textarea name="text" id="sharedTextInput" rows="2" placeholder="Paste a link, Wi-Fi password, or quick note...">{shared_text}</textarea>
       <div class="text-share-actions">
@@ -634,27 +663,75 @@ PAGE_MAIN = """<!DOCTYPE html>
 
   function copySharedText() {{
     const textarea = document.getElementById('sharedTextInput');
-    if (!textarea.value.trim()) return;
-    navigator.clipboard.writeText(textarea.value).then(() => {{
-      const btn = document.getElementById('btnCopyText');
-      const originalText = btn.innerText;
-      btn.innerText = 'Copied! ✓';
-      setTimeout(() => btn.innerText = originalText, 2000);
-    }}).catch(() => {{
-      textarea.select();
-      document.execCommand('copy');
-    }});
+    const textToCopy = textarea ? textarea.value.trim() : '';
+    if (!textToCopy) return;
+
+    const btn = document.getElementById('btnCopyText');
+    const originalText = btn ? btn.innerText : 'Copy Text';
+
+    function showSuccess() {{
+      if (btn) {{
+        btn.innerText = 'Copied! ✓';
+        setTimeout(() => btn.innerText = originalText, 2000);
+      }}
+    }}
+
+    function fallbackCopy() {{
+      try {{
+        textarea.focus();
+        textarea.select();
+        textarea.setSelectionRange(0, 99999);
+        const successful = document.execCommand('copy');
+        if (successful) {{
+          showSuccess();
+        }} else {{
+          alert('Copy failed. Please manually select and copy text.');
+        }}
+      }} catch (err) {{
+        alert('Copy failed. Please manually select and copy text.');
+      }}
+    }}
+
+    if (navigator.clipboard && typeof navigator.clipboard.writeText === 'function') {{
+      navigator.clipboard.writeText(textToCopy).then(showSuccess).catch(() => fallbackCopy());
+    }} else {{
+      fallbackCopy();
+    }}
   }}
 
-  // Real-time Auto-Refresh via Server-Sent Events (SSE)
+  // Real-time Auto-Refresh via Server-Sent Events (SSE) with Fallback Polling
+  let lastSharedText = undefined;
+  let sseActive = false;
+
   if (window.EventSource) {{
-    const evtSource = new EventSource('/events');
-    evtSource.onmessage = (e) => {{
-      if (e.data === 'reload') {{
-        window.location.reload();
-      }}
-    }};
+    try {{
+      const evtSource = new EventSource('/events');
+      evtSource.onopen = () => {{ sseActive = true; }};
+      evtSource.onmessage = (e) => {{
+        if (e.data === 'reload') {{
+          window.location.reload();
+        }
+      }};
+      evtSource.onerror = () => {{ sseActive = false; }};
+    }} catch(err) {{
+      sseActive = false;
+    }}
   }}
+
+  // Backup polling every 3 seconds to ensure real-time sync across devices even if SSE drops
+  setInterval(async () => {{
+    try {{
+      const res = await fetch('/text');
+      if (res.ok) {{
+        const data = await res.json();
+        if (lastSharedText === undefined) {{
+          lastSharedText = data.text || '';
+        }} else if (data.text !== undefined && data.text !== lastSharedText) {{
+          window.location.reload();
+        }}
+      }}
+    }} catch(e) {{}}
+  }}, 3000);
 </script>
 </body>
 </html>
@@ -675,10 +752,32 @@ def create_app(upload_dir: Path, display_host: str) -> FastAPI:
 
         # Get shared text data
         shared_data = get_shared_text(upload_dir)
-        shared_text = shared_data.get("text", "")
+        raw_text = shared_data.get("text", "")
+        escaped_text = html.escape(raw_text)
+
+        shared_display_html = ""
+        if raw_text:
+            if raw_text.startswith("http://") or raw_text.startswith("https://"):
+                shared_display_html = f"""
+                <div class="shared-display-box">
+                  <div class="shared-display-label">🔗 Active Shared Link:</div>
+                  <div class="shared-display-content">
+                    <a href="{escaped_text}" target="_blank" rel="noopener">{escaped_text}</a>
+                  </div>
+                </div>
+                """
+            else:
+                shared_display_html = f"""
+                <div class="shared-display-box">
+                  <div class="shared-display-label">💬 Active Shared Text:</div>
+                  <div class="shared-display-content">{escaped_text}</div>
+                </div>
+                """
+
         shared_meta = ""
         if shared_data.get("time"):
-            shared_meta = f'<div class="shared-meta-text">Last shared: {shared_data["time"]} from {shared_data["client"]}</div>'
+            client_ip = html.escape(shared_data.get("client", ""))
+            shared_meta = f'<div class="shared-meta-text">Last shared: {shared_data["time"]} from {client_ip}</div>'
 
         # Get list of files sorted by modification time (newest first)
         files = []
@@ -743,7 +842,8 @@ def create_app(upload_dir: Path, display_host: str) -> FastAPI:
             host=display_host,
             file_count=len(files),
             file_cards=file_cards_html,
-            shared_text=shared_text,
+            shared_display_html=shared_display_html,
+            shared_text=escaped_text,
             shared_text_meta=shared_meta,
             download_all_btn=download_all_btn
         ))
@@ -1009,10 +1109,17 @@ def main() -> None:
 
     app = create_app(upload_dir, display_host)
 
+    config = uvicorn.Config(app=app, host=args.host, port=args.port, log_level="warning")
+    server = uvicorn.Server(config)
+
     try:
-        uvicorn.run(app, host=args.host, port=args.port, log_level="warning")
-    except KeyboardInterrupt:
-        console.print("\n[dim]Stopped.[/dim]")
+        server.run()
+    except (KeyboardInterrupt, SystemExit):
+        pass
+    except Exception as e:
+        console.print(f"\n[red]Server error:[/red] {e}")
+    finally:
+        console.print("\n[bold cyan]LAN Share server stopped cleanly.[/bold cyan]")
         sys.exit(0)
 
 
